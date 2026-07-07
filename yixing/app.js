@@ -34,31 +34,26 @@
   var VIEWS = ["intro", "pool", "plan", "graph"]; // 移动端四个子页；桌面端三栏并排
   var HEAVY_EDGE_MIN = 60; // 达到这个分钟数即提示“移动偏重”
 
-  // 拼配区槽位：按 2 小时粒度排（用户要求，不让一个板块独占整个上午/下午）。
-  // kind 用于热度/住宿等提示：08-10 morning，12-16 afternoon，18-20 evening。
+  // 拼配区槽位：1 小时网格（Day 1/2 为 08:00-20:00 + 住宿，Day 3 到午餐返程）。
+  // kind 用于热度/住宿等提示：08-11 morning，12-16 afternoon，17-20 evening。
   // day 用于分组表头；time: true 的空槽渲染成紧凑单行。
-  var SLOTS = [
-    { id: "arrival", label: "到达", sub: "Arrival", kind: "flex", day: null },
-    { id: "d1-08", label: "08:00", kind: "morning", day: "Day 1", time: true },
-    { id: "d1-10", label: "10:00", kind: "morning", day: "Day 1", time: true },
-    { id: "d1-12", label: "12:00", kind: "afternoon", day: "Day 1", time: true },
-    { id: "d1-14", label: "14:00", kind: "afternoon", day: "Day 1", time: true },
-    { id: "d1-16", label: "16:00", kind: "afternoon", day: "Day 1", time: true },
-    { id: "d1-18", label: "18:00", kind: "evening", day: "Day 1", time: true },
-    { id: "d1-20", label: "20:00", kind: "evening", day: "Day 1", time: true },
-    { id: "stay1", label: "住宿", sub: "Stay 1", kind: "stay", day: "Day 1" },
-    { id: "d2-08", label: "08:00", kind: "morning", day: "Day 2", time: true },
-    { id: "d2-10", label: "10:00", kind: "morning", day: "Day 2", time: true },
-    { id: "d2-12", label: "12:00", kind: "afternoon", day: "Day 2", time: true },
-    { id: "d2-14", label: "14:00", kind: "afternoon", day: "Day 2", time: true },
-    { id: "d2-16", label: "16:00", kind: "afternoon", day: "Day 2", time: true },
-    { id: "d2-18", label: "18:00", kind: "evening", day: "Day 2", time: true },
-    { id: "d2-20", label: "20:00", kind: "evening", day: "Day 2", time: true },
-    { id: "stay2", label: "住宿", sub: "Stay 2", kind: "stay", day: "Day 2" },
-    { id: "d3-08", label: "08:00", kind: "morning", day: "Day 3", time: true },
-    { id: "d3-10", label: "10:00", kind: "morning", day: "Day 3", time: true },
-    { id: "return", label: "12:00 · 午餐 / 返程", sub: "Return", kind: "flex", day: "Day 3" }
-  ];
+  // 放入卡片后，按其 durationMin 覆盖到的后续空槽会自动隐藏（见 coveredSlots）。
+  var SLOTS = (function () {
+    var list = [{ id: "arrival", label: "到达", sub: "Arrival", kind: "flex", day: null }];
+    function pad(h) { return h < 10 ? "0" + h : "" + h; }
+    function kindOf(h) { return h < 12 ? "morning" : (h < 17 ? "afternoon" : "evening"); }
+    [1, 2].forEach(function (d) {
+      for (var h = 8; h <= 20; h += 1) {
+        list.push({ id: "d" + d + "-" + pad(h), label: pad(h) + ":00", kind: kindOf(h), day: "Day " + d, time: true });
+      }
+      list.push({ id: "stay" + d, label: "住宿", sub: "Stay " + d, kind: "stay", day: "Day " + d });
+    });
+    for (var h3 = 8; h3 <= 11; h3 += 1) {
+      list.push({ id: "d3-" + pad(h3), label: pad(h3) + ":00", kind: kindOf(h3), day: "Day 3", time: true });
+    }
+    list.push({ id: "return", label: "12:00 · 午餐 / 返程", sub: "Return", kind: "flex", day: "Day 3" });
+    return list;
+  })();
 
   // 槽位对用户的完整称呼（toast、已在标签、路线图都用它）
   function slotLabel(slot) {
@@ -418,8 +413,11 @@
     });
   }
 
-  function slotWarnings(slot, card) {
+  function slotWarnings(slot, card, overlapped) {
     var items = [];
+    if (overlapped) {
+      items.push({ text: "与上一项的预估时长重叠，建议挪后", strong: true });
+    }
     if (card.type === "stay" && slot.kind !== "stay") {
       items.push({ text: "住宿卡不在住宿槽 — 建议移到 Stay 槽", strong: true });
     }
@@ -432,7 +430,31 @@
     return items;
   }
 
-  function buildSlotEl(slot) {
+  /**
+   * 覆盖计算：时间槽里的卡按预估时长向后占格（1 小时一格，向上取整）。
+   * 被覆盖的空槽隐藏；被覆盖但已被占用的槽保持可见并出重叠提醒。
+   * 覆盖不跨天、不跨住宿槽。
+   */
+  function coveredSlots() {
+    var hidden = {};
+    var overlapped = {};
+    for (var i = 0; i < SLOTS.length; i += 1) {
+      var slot = SLOTS[i];
+      if (!slot.time) continue;
+      var cardId = state.slots[slot.id];
+      if (!cardId || !cardById[cardId]) continue;
+      var span = Math.max(1, Math.ceil((cardById[cardId].durationMin || 0) / 60));
+      for (var k = 1; k < span; k += 1) {
+        var nxt = SLOTS[i + k];
+        if (!nxt || !nxt.time || nxt.day !== slot.day) break;
+        if (state.slots[nxt.id]) overlapped[nxt.id] = true;
+        else hidden[nxt.id] = true;
+      }
+    }
+    return { hidden: hidden, overlapped: overlapped };
+  }
+
+  function buildSlotEl(slot, overlapped) {
     var cardId = state.slots[slot.id];
     var card = cardId ? cardById[cardId] : null;
     var cls = "slot " + (card ? "slot--filled" : "slot--empty");
@@ -465,7 +487,7 @@
       occ.appendChild(removeBtn);
       node.appendChild(occ);
 
-      var warnings = slotWarnings(slot, card);
+      var warnings = slotWarnings(slot, card, overlapped);
       if (warnings.length) {
         var ul = el("ul", "slot-warnings");
         warnings.forEach(function (w) {
@@ -520,12 +542,14 @@
     slotListEl.innerHTML = "";
     var slotEls = {};
     var lastDay = null;
+    var cover = coveredSlots();
     SLOTS.forEach(function (slot) {
       if (slot.day && slot.day !== lastDay) {
         slotListEl.appendChild(el("h3", "slot-day-head", slot.day));
         lastDay = slot.day;
       }
-      var elx = buildSlotEl(slot);
+      if (cover.hidden[slot.id]) return; // 被上一项时长覆盖的空槽不渲染
+      var elx = buildSlotEl(slot, cover.overlapped[slot.id]);
       slotEls[slot.id] = elx;
       slotListEl.appendChild(elx);
     });
