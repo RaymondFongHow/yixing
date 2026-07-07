@@ -840,6 +840,10 @@ button {
   top: 0;
   z-index: 60;
   pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
   padding: 8px 14px;
   border-radius: 10px;
   background: var(--surface);
@@ -849,8 +853,21 @@ button {
   font-weight: 600;
   max-width: 60vw;
   overflow: hidden;
+  /* 高度按卡片时长在网格里的占位伸展（liftDrag 里实测行高） */
+  transition: height 0.28s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.drag-ghost-title {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
+}
+
+.drag-ghost-dur {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 /* 选卡后飞向底部悬置区的影子 */

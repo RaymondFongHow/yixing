@@ -44,12 +44,12 @@
     function kindOf(h) { return h < 12 ? "morning" : (h < 17 ? "afternoon" : "evening"); }
     [1, 2].forEach(function (d) {
       for (var h = 8; h <= 20; h += 1) {
-        list.push({ id: "d" + d + "-" + pad(h), label: pad(h) + ":00", kind: kindOf(h), day: "Day " + d, time: true });
+        list.push({ id: "d" + d + "-" + pad(h), label: pad(h) + ":00", kind: kindOf(h), day: "Day " + d, time: true, hour: h });
       }
       list.push({ id: "stay" + d, label: "住宿", sub: "Stay " + d, kind: "stay", day: "Day " + d });
     });
     for (var h3 = 8; h3 <= 11; h3 += 1) {
-      list.push({ id: "d3-" + pad(h3), label: pad(h3) + ":00", kind: kindOf(h3), day: "Day 3", time: true });
+      list.push({ id: "d3-" + pad(h3), label: pad(h3) + ":00", kind: kindOf(h3), day: "Day 3", time: true, hour: h3 });
     }
     list.push({ id: "return", label: "12:00 · 午餐 / 返程", sub: "Return", kind: "flex", day: "Day 3" });
     return list;
@@ -58,6 +58,14 @@
   // 槽位对用户的完整称呼（toast、已在标签、路线图都用它）
   function slotLabel(slot) {
     return (slot.day ? slot.day + " · " : "") + slot.label;
+  }
+
+  // 起始整点 + 预估时长 → 结束时间 "HH:MM"
+  function endTimeLabel(slot, durationMin) {
+    var total = slot.hour * 60 + durationMin;
+    var h = Math.floor(total / 60);
+    var m = total % 60;
+    return (h < 10 ? "0" + h : "" + h) + ":" + (m < 10 ? "0" + m : "" + m);
   }
 
   var THEME_GROUPS = [
@@ -465,7 +473,12 @@
     node.setAttribute("data-slot-id", slot.id);
 
     var head = el("div", "slot-head");
-    head.appendChild(el("span", "slot-label", slot.label));
+    // 放了卡的时间槽显示起止时间，例如 "10:00 – 11:30"
+    var labelText = slot.label;
+    if (slot.time && card && card.durationMin) {
+      labelText = slot.label + " – " + endTimeLabel(slot, card.durationMin);
+    }
+    head.appendChild(el("span", "slot-label", labelText));
     if (slot.sub) head.appendChild(el("span", "slot-sub", slot.sub));
     else if (slot.time && !card) head.appendChild(el("span", "slot-sub", "留白"));
     node.appendChild(head);
@@ -876,13 +889,9 @@
     document.body.appendChild(ghost);
     var dx = window.innerWidth / 2 - (rect.left + rect.width / 2);
     var dy = window.innerHeight - 96 - rect.top;
-    // 两次 rAF：先让初始位置渲染出来，transition 才有起点
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () {
-        ghost.style.transform = "translate(" + dx + "px, " + dy + "px) scale(0.4)";
-        ghost.style.opacity = "0";
-      });
-    });
+    void ghost.offsetHeight; // 强制 reflow，让 transition 有起点（不依赖 rAF）
+    ghost.style.transform = "translate(" + dx + "px, " + dy + "px) scale(0.4)";
+    ghost.style.opacity = "0";
     setTimeout(function () {
       if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
     }, 420);
@@ -1113,7 +1122,11 @@
     if (!drag || drag.lifted) return;
     drag.lifted = true;
     var card = cardById[drag.cardId];
-    var ghost = el("div", "drag-ghost", card ? card.title : "");
+    var ghost = el("div", "drag-ghost");
+    ghost.appendChild(el("span", "drag-ghost-title", card ? card.title : ""));
+    if (card && card.durationMin) {
+      ghost.appendChild(el("span", "drag-ghost-dur", "约 " + card.durationMin + " 分"));
+    }
     document.body.appendChild(ghost);
     drag.ghost = ghost;
     positionGhost();
@@ -1126,6 +1139,17 @@
 
     // 移动端：提起卡片即切到行程拼配，槽位成为可放目标
     if (isMobile() && state.view !== "plan") setView("plan");
+
+    // ghost 伸展到它在网格里将占据的高度（顶端对齐手指 = 开始时间）。
+    // 行高从一个可见的空时间槽实测，切完视图再量才拿得到真实值。
+    var span = Math.max(1, Math.ceil(((card && card.durationMin) || 0) / 60));
+    var probe = document.querySelector(".slot--time.slot--empty");
+    var rowH = probe && probe.offsetHeight ? probe.offsetHeight : 36;
+    var gap = 8; // #slot-list 的 gap
+    ghost.style.height = rowH + "px";
+    var targetH = span * rowH + (span - 1) * gap;
+    void ghost.offsetHeight; // 强制 reflow，让 transition 有起点（不依赖 rAF）
+    ghost.style.height = targetH + "px";
 
     // 槽位列表通常比视口高：指针停在上下边缘时自动滚动，拖得到画面外的槽位
     drag.scrollTimer = setInterval(autoScrollDuringDrag, 30);
