@@ -34,23 +34,33 @@
   var VIEWS = ["intro", "pool", "plan", "graph"]; // 移动端四个子页；桌面端三栏并排
   var HEAVY_EDGE_MIN = 60; // 达到这个分钟数即提示“移动偏重”
 
-  // 拼配区槽位：1 小时网格（Day 1/2 为 08:00-20:00 + 住宿，Day 3 到午餐返程）。
-  // kind 用于热度/住宿等提示：08-11 morning，12-16 afternoon，17-20 evening。
-  // day 用于分组表头；time: true 的空槽渲染成紧凑单行。
+  // 拼配区槽位：30 分钟网格（Day 1/2 为 08:00-20:30 + 住宿，Day 3 到午餐返程）。
+  // kind 用于热度/住宿等提示：<12 morning，12-16 afternoon，17+ evening。
+  // day 用于分组表头；time: true 的空槽渲染成紧凑单行；startMin 为当天起始分钟数。
   // 放入卡片后，按其 durationMin 覆盖到的后续空槽会自动隐藏（见 coveredSlots）。
+  var SLOT_STEP_MIN = 30;
+
   var SLOTS = (function () {
     var list = [{ id: "arrival", label: "到达", sub: "Arrival", kind: "flex", day: null }];
-    function pad(h) { return h < 10 ? "0" + h : "" + h; }
-    function kindOf(h) { return h < 12 ? "morning" : (h < 17 ? "afternoon" : "evening"); }
-    [1, 2].forEach(function (d) {
-      for (var h = 8; h <= 20; h += 1) {
-        list.push({ id: "d" + d + "-" + pad(h), label: pad(h) + ":00", kind: kindOf(h), day: "Day " + d, time: true, hour: h });
-      }
-      list.push({ id: "stay" + d, label: "住宿", sub: "Stay " + d, kind: "stay", day: "Day " + d });
-    });
-    for (var h3 = 8; h3 <= 11; h3 += 1) {
-      list.push({ id: "d3-" + pad(h3), label: pad(h3) + ":00", kind: kindOf(h3), day: "Day 3", time: true, hour: h3 });
+    function pad(n) { return n < 10 ? "0" + n : "" + n; }
+    function labelOf(min) { return pad(Math.floor(min / 60)) + ":" + pad(min % 60); }
+    function kindOf(min) {
+      var h = Math.floor(min / 60);
+      return h < 12 ? "morning" : (h < 17 ? "afternoon" : "evening");
     }
+    function pushDay(d, fromMin, toMin) {
+      for (var m = fromMin; m <= toMin; m += SLOT_STEP_MIN) {
+        list.push({
+          id: "d" + d + "-" + pad(Math.floor(m / 60)) + pad(m % 60),
+          label: labelOf(m), kind: kindOf(m), day: "Day " + d, time: true, startMin: m
+        });
+      }
+    }
+    pushDay(1, 480, 1230); // 08:00-20:30
+    list.push({ id: "stay1", label: "住宿", sub: "Stay 1", kind: "stay", day: "Day 1" });
+    pushDay(2, 480, 1230);
+    list.push({ id: "stay2", label: "住宿", sub: "Stay 2", kind: "stay", day: "Day 2" });
+    pushDay(3, 480, 690); // 08:00-11:30
     list.push({ id: "return", label: "12:00 · 午餐 / 返程", sub: "Return", kind: "flex", day: "Day 3" });
     return list;
   })();
@@ -60,9 +70,9 @@
     return (slot.day ? slot.day + " · " : "") + slot.label;
   }
 
-  // 起始整点 + 预估时长 → 结束时间 "HH:MM"
+  // 槽位起点 + 预估时长 → 结束时间 "HH:MM"
   function endTimeLabel(slot, durationMin) {
-    var total = slot.hour * 60 + durationMin;
+    var total = slot.startMin + durationMin;
     var h = Math.floor(total / 60);
     var m = total % 60;
     return (h < 10 ? "0" + h : "" + h) + ":" + (m < 10 ? "0" + m : "" + m);
@@ -439,7 +449,7 @@
   }
 
   /**
-   * 覆盖计算：时间槽里的卡按预估时长向后占格（1 小时一格，向上取整）。
+   * 覆盖计算：时间槽里的卡按预估时长向后占格（30 分钟一格，向上取整）。
    * 被覆盖的空槽隐藏；被覆盖但已被占用的槽保持可见并出重叠提醒。
    * 覆盖不跨天、不跨住宿槽。
    */
@@ -451,7 +461,7 @@
       if (!slot.time) continue;
       var cardId = state.slots[slot.id];
       if (!cardId || !cardById[cardId]) continue;
-      var span = Math.max(1, Math.ceil((cardById[cardId].durationMin || 0) / 60));
+      var span = Math.max(1, Math.ceil((cardById[cardId].durationMin || 0) / SLOT_STEP_MIN));
       for (var k = 1; k < span; k += 1) {
         var nxt = SLOTS[i + k];
         if (!nxt || !nxt.time || nxt.day !== slot.day) break;
@@ -1142,7 +1152,7 @@
 
     // ghost 伸展到它在网格里将占据的高度（顶端对齐手指 = 开始时间）。
     // 行高从一个可见的空时间槽实测，切完视图再量才拿得到真实值。
-    var span = Math.max(1, Math.ceil(((card && card.durationMin) || 0) / 60));
+    var span = Math.max(1, Math.ceil(((card && card.durationMin) || 0) / SLOT_STEP_MIN));
     var probe = document.querySelector(".slot--time.slot--empty");
     var rowH = probe && probe.offsetHeight ? probe.offsetHeight : 36;
     var gap = 8; // #slot-list 的 gap
