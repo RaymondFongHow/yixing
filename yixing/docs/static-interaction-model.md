@@ -10,6 +10,8 @@
 - 不需要登录。
 - 不需要服务端 API。
 - 地点、住宿、交通估算都可以写成本地 JSON 或 JavaScript object。
+- 朋友大概率用手机（微信内置浏览器）打开：拖拽必须用 pointer events 实现，或提供“点卡片再点槽位”的备选交互；HTML5 原生 drag-and-drop 在触屏上不可用。
+- 主题切换不能只依赖 hover，触屏上用点选 / selected state 驱动。
 
 如果后续使用构建工具，也必须能生成静态文件，例如 Vite build 后部署到 GitHub Pages。
 
@@ -33,12 +35,7 @@
    - 每个候选项是一张可拖拽卡片
 
 3. 行程拼配区
-   - Day 1 上午
-   - Day 1 下午
-   - Day 1 晚上
-   - Day 2 上午
-   - Day 2 下午
-   - 可继续扩展
+   - 完整槽位列表以 `docs/card-composition-model.md` 的拼配区为准（Arrival、Day 1-3 各时段、Stay 1/2、Lunch / Return）。
 
 4. 交通提示层
    - 当上下两个模块区域不同，自动插入大致交通时间。
@@ -116,9 +113,9 @@ const places = [
     type: "place",
     theme: "dingshu",
     locationCode: "DS",
-    cardRole: "experience-anchor",
+    cardRole: "anchor",
     durationMin: 90,
-    bestTime: ["afternoon", "late-afternoon"],
+    bestTime: ["afternoon"],
     tags: ["紫砂", "老街", "工坊", "散步"],
     reservationNeeded: false,
     heatRisk: "medium",
@@ -181,35 +178,15 @@ const places = [
 
 后续可以合并或拆分，当前不需要过细。
 
-## 交通时间矩阵
+## 交通时间数据
 
-因为是静态站，可以先写死区域间估算时间。初期可以用区域矩阵做粗提示，但正式拼配地图应升级为 `transportEdges` 网络数据，详见 `docs/network-map-model.md`。
-
-```js
-const travelTimes = {
-  "CENTER:DS": "25-35 min",
-  "DS:YX": "25-40 min",
-  "DS:ZH": "45-60 min",
-  "YX:ZH": "30-45 min",
-  "ZH:SD": "45-60 min",
-  "CENTER:DT": "10-20 min"
-};
-```
-
-拼配逻辑：
-
-```js
-function getTravelTime(fromCode, toCode) {
-  if (!fromCode || !toCode || fromCode === toCode) return null;
-  return travelTimes[`${fromCode}:${toCode}`] || travelTimes[`${toCode}:${fromCode}`] || "需单独确认";
-}
-```
+交通时间的唯一数据源是 `transportEdges`（见 `docs/network-map-model.md`），按地点 id 记录确认过的直接交通。早期草案曾用区域间矩阵（`"CENTER:DS": "25-35 min"` 这类）做粗提示，现已废弃：同一段交通只保留一个数据来源。
 
 当用户把两个地点拖到上下相邻的行程板块里：
 
-- 如果 `locationCode` 相同，不插入交通提示。
-- 如果 `locationCode` 不同，插入一条交通时间。
-- 如果查不到矩阵，显示“需单独确认”。
+- 如果两点 id 之间存在 direct edge，显示该 edge 的时间范围。
+- 如果其中一张卡片 `locationCode` 为 `CURRENT`（自由时间等），不触发交通提示。
+- 如果查不到 edge，显示“需单独确认”，并在交通图上显示断点。
 
 ## 交通时距网络图
 
@@ -220,7 +197,7 @@ function getTravelTime(fromCode, toCode) {
 - 线长按交通时间映射。
 - 如果两个相邻地点没有 direct edge，不画线，只显示断点提示。
 - 如果路线需要经过第三个候选地点，应拆成两条线，不画跨越第三地的直连。
-- 这张图不依赖地图 API，可以用本地 JSON / JS 数据和 SVG 实现。
+- 这张图不依赖地图 API，用本地 JSON / JS 数据实现；第一版顺序路线图用普通 HTML 渲染，SVG 留给后续网络模式（见 `docs/network-map-model.md`）。
 
 第一版可以先做“按拼配顺序生成的路线图”，后续再扩展为显示所有已选节点之间 direct edge 的网络图。
 

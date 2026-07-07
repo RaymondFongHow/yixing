@@ -208,14 +208,14 @@ function edgeLength(minutes) {
 | 45-70 min | 长 |
 | 70+ min | 很长，并给出重排提示 |
 
-## 布局方式
+## 渲染方式
 
-初版建议使用 SVG，而不是 Canvas：
+第一版“顺序路线图”是一条线性链，用普通 HTML 实现即可，不引入 SVG：
 
-- SVG 方便画线、文字、节点和 hover 状态。
-- 每条线可以独立设置 stroke、dash、label。
-- 每个节点可以加 `data-theme`，hover 时同步改变页面主题。
-- 静态站不需要复杂渲染引擎。
+- flex column 布局：节点是普通元素，节点之间的连接线是高度按分钟映射的 div，断点是样式化的间隔。
+- 文字标签自动换行、CSS variables 主题直接生效、响应式和触屏交互都走普通文档流，比 SVG `<text>` 和 viewBox 省事。
+- SVG 留给后续的“网络关系图 / 混合模式”：需要任意角度的点对点连线、交叉线和线上标签时才值得引入。
+- 渲染层必须与 `buildRouteGraph` 的数据逻辑分离，便于以后替换渲染方式。
 
 可选布局模式：
 
@@ -240,7 +240,7 @@ function edgeLength(minutes) {
 
 当用户拖拽改变行程：
 
-- 右侧或下方 SVG 路线图立即重绘。
+- 右侧或下方路线图立即重绘。
 - 相邻两站有 direct edge：画实线，显示交通时间。
 - 相邻两站没有 direct edge：不画线，在两站之间显示断点。
 - 如果存在 `blockedEdges` 说明：显示原因和建议中转。

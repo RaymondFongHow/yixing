@@ -36,7 +36,7 @@
   type: "place",
   theme: "dingshu",
   locationCode: "DS",
-  cardRole: "experience-anchor",
+  cardRole: "anchor",
   durationMin: 90,
   bestTime: ["morning", "afternoon"],
   tags: ["紫砂", "老街", "工坊"],
@@ -46,7 +46,7 @@
   visualValue: 4,
   budgetLevel: "$",
   groupFit: "all-four",
-  mapNode: true,
+  mapNode: { shortLabel: "蜀山", cluster: "dingshu", importance: 3 },
   summary: "适合作为丁蜀线入口的紫砂生活街区。",
   cautions: ["不要只当拍照老街，需要看前店后坊和手艺脉络。"],
   sourceLinks: []
@@ -58,8 +58,9 @@
 - `experienceValue`：是否真的能进入地方。
 - `visualValue`：是否好看、好拍、适合网站呈现。
 - `heatRisk`：夏季户外暴晒风险，取 `none / low / medium / high`。
-- `cardRole`：卡片在拼配中的角色，例如 `anchor / optional / stay / food / buffer`。
-- `mapNode`：是否进入交通时距网络图。
+- `bestTime`：取值仅限 `morning / afternoon / evening / night`，与槽位对应。
+- `cardRole`：卡片在拼配中的角色，取 `anchor / optional / stay / food / buffer`。
+- `mapNode`：`null` 表示不进入交通时距网络图；进入则为 `{ shortLabel, cluster, importance }`，见 `docs/network-map-model.md`。
 
 ## 自由时间卡片
 
@@ -82,7 +83,7 @@
   visualValue: 1,
   budgetLevel: "$",
   groupFit: "all-four",
-  mapNode: false,
+  mapNode: null,
   summary: "用于保留旅行中的松弛时间。"
 }
 ```
@@ -122,6 +123,7 @@
 - 如果相邻卡片没有 direct edge，交通图不画线，并提示需要重排或补中转。
 - 如果户外高热风险卡片被放到中午，显示热度提醒。
 - 如果相邻卡片之一是 `free-time` 且 `locationCode` 为 `CURRENT`，它不触发新的交通边。
+- 拖拽必须支持触屏：用 pointer events 实现，并提供“点卡片再点槽位”的备选方式；不用 HTML5 原生 drag-and-drop。
 
 ## 状态保存
 
@@ -139,7 +141,7 @@
 
 ## 视觉行为
 
-- hover 卡片时切换页面 `data-theme`。
+- hover / 点选卡片时切换页面 `data-theme`，触屏以点选为准。
 - 拖拽卡片时保留原主题色，但 drop zone 不应大幅跳动。
 - 卡片不应做成旅游平台式大图卡；应像菜单选项，信息密度适中。
 - 视觉主次优先展示：主题、时长、体验价值、位置、预约/热度风险。
