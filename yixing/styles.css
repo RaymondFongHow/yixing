@@ -513,14 +513,30 @@ button {
   color: #fff;
 }
 
-.saved-plan { display: inline-flex; align-items: center; }
+/* 用户保存的方案：整体是一颗药丸，标题和删除叉都在里面 */
+.template-row #preset-buttons .saved-plan {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  transition: border-color 0.2s ease;
+}
+.template-row #preset-buttons .saved-plan:hover { border-color: var(--accent); }
 
-.saved-plan-del {
+.template-row #preset-buttons .saved-plan button {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 4px 3px 4px 11px;
+}
+
+.template-row #preset-buttons .saved-plan .saved-plan-del {
+  padding: 4px 10px 4px 3px;
   font-size: 12px;
   color: var(--muted);
-  padding: 4px 5px;
 }
-.saved-plan-del:hover { color: var(--warn); }
+.template-row #preset-buttons .saved-plan .saved-plan-del:hover { color: var(--warn); }
 
 .template-note {
   flex-basis: 100%;
