@@ -34,47 +34,23 @@
   var VIEWS = ["intro", "pool", "plan", "graph"]; // 移动端四个子页；桌面端三栏并排
   var HEAVY_EDGE_MIN = 60; // 达到这个分钟数即提示“移动偏重”
 
-  // 拼配区槽位：30 分钟网格（Day 1/2 为 08:00-20:30 + 住宿，Day 3 到午餐返程）。
-  // kind 用于热度/住宿等提示：<12 morning，12-16 afternoon，17+ evening。
-  // day 用于分组表头；time: true 的空槽渲染成紧凑单行；startMin 为当天起始分钟数。
-  // 放入卡片后，按其 durationMin 覆盖到的后续空槽会自动隐藏（见 coveredSlots）。
-  var SLOT_STEP_MIN = 30;
+  // 行程是一个“自动日历”：每天一个有序队列，事件按预估时长自动向后叠放，
+  // 相邻地点之间自动插入交通段并推后时钟；← → 在天与天之间切换。
+  var DAYS = [
+    { id: "arrival", label: "到达", startMin: 19 * 60, hasStay: false, hint: "到达当晚的缓冲段" },
+    { id: "d1", label: "Day 1", startMin: 9 * 60, hasStay: true },
+    { id: "d2", label: "Day 2", startMin: 9 * 60, hasStay: true },
+    { id: "d3", label: "Day 3", startMin: 9 * 60, hasStay: false, hint: "午餐后返程" }
+  ];
+  var dayById = {};
+  DAYS.forEach(function (d) { dayById[d.id] = d; });
 
-  var SLOTS = (function () {
-    var list = [{ id: "arrival", label: "到达", sub: "Arrival", kind: "flex", day: null }];
-    function pad(n) { return n < 10 ? "0" + n : "" + n; }
-    function labelOf(min) { return pad(Math.floor(min / 60)) + ":" + pad(min % 60); }
-    function kindOf(min) {
-      var h = Math.floor(min / 60);
-      return h < 12 ? "morning" : (h < 17 ? "afternoon" : "evening");
-    }
-    function pushDay(d, fromMin, toMin) {
-      for (var m = fromMin; m <= toMin; m += SLOT_STEP_MIN) {
-        list.push({
-          id: "d" + d + "-" + pad(Math.floor(m / 60)) + pad(m % 60),
-          label: labelOf(m), kind: kindOf(m), day: "Day " + d, time: true, startMin: m
-        });
-      }
-    }
-    pushDay(1, 480, 1230); // 08:00-20:30
-    list.push({ id: "stay1", label: "住宿", sub: "Stay 1", kind: "stay", day: "Day 1" });
-    pushDay(2, 480, 1230);
-    list.push({ id: "stay2", label: "住宿", sub: "Stay 2", kind: "stay", day: "Day 2" });
-    pushDay(3, 480, 690); // 08:00-11:30
-    list.push({ id: "return", label: "12:00 · 午餐 / 返程", sub: "Return", kind: "flex", day: "Day 3" });
-    return list;
-  })();
+  var DAY_END_WARN_MIN = 22 * 60; // 排到这个点之后提示“偏满”
+  var CAL_PX_PER_MIN = 1.1;       // 日历块高度与分钟的比例
 
-  // 槽位对用户的完整称呼（toast、已在标签、路线图都用它）
-  function slotLabel(slot) {
-    return (slot.day ? slot.day + " · " : "") + slot.label;
-  }
-
-  // 槽位起点 + 预估时长 → 结束时间 "HH:MM"
-  function endTimeLabel(slot, durationMin) {
-    var total = slot.startMin + durationMin;
-    var h = Math.floor(total / 60);
-    var m = total % 60;
+  function timeLabel(min) {
+    var h = Math.floor(min / 60);
+    var m = min % 60;
     return (h < 10 ? "0" + h : "" + h) + ":" + (m < 10 ? "0" + m : "" + m);
   }
 
@@ -122,9 +98,6 @@
 
   var cardById = {};
   PLACES.forEach(function (p) { cardById[p.id] = p; });
-
-  var slotById = {};
-  SLOTS.forEach(function (s) { slotById[s.id] = s; });
 
   /* ================= 2. 纯数据逻辑（与渲染分离） ================= */
 
@@ -242,30 +215,131 @@
     return total + (graph.regionMinutes || 0);
   }
 
+  // 相邻两张卡之间的交通段（日历排时用）；null 表示不加交通（自由时间等）
+  function travelSegment(prevCard, nextCard) {
+    if (!isRouteNode(prevCard) || !isRouteNode(nextCard)) return null;
+    var edge = findDirectEdge(prevCard.id, nextCard.id, EDGES);
+    if (edge) {
+      return { minutes: edge.minutes || 0, label: edge.label + " · " + (MODE_LABELS[edge.mode] || edge.mode), est: false };
+    }
+    var blocked = findBlockedEdge(prevCard.id, nextCard.id, BLOCKED);
+    if (blocked) {
+      var via = (blocked.suggestedVia || []).map(function (id) { return cardById[id] ? cardById[id].title : id; });
+      return { minutes: 60, label: "需单独确认（暂按 60 分）" + (via.length ? " · 建议中转 " + via.join("、") : ""), est: true, broken: true };
+    }
+    var est = regionEstimate(prevCard, nextCard, REGION_TIMES, SAME_REGION);
+    if (est) {
+      return { minutes: est.minutes, label: "约 " + est.range[0] + "-" + est.range[1] + " 分（" + (est.same ? "同区" : "区域") + "粗估）· 打车", est: true };
+    }
+    return { minutes: 45, label: "需单独确认（暂按 45 分）", est: true, broken: true };
+  }
+
+  // 一天的自动叠放：事件按时长顺排，地点变化时插入交通段并推后时钟。
+  // 交通按“上一个真实地点”计算：自由时间/缓冲（原地）夹在中间不吞掉那段路。
+  function buildDaySchedule(dayId) {
+    var day = dayById[dayId];
+    var blocks = [];
+    var t = day.startMin;
+    var travelTotal = 0;
+    var prevRoute = null;
+    state.days[dayId].forEach(function (id) {
+      var card = cardById[id];
+      if (!card) return;
+      if (prevRoute && isRouteNode(card)) {
+        var seg = travelSegment(prevRoute, card);
+        if (seg && seg.minutes > 0) {
+          blocks.push({ type: "travel", start: t, end: t + seg.minutes, seg: seg });
+          t += seg.minutes;
+          travelTotal += seg.minutes;
+        }
+      }
+      var dur = card.durationMin || 0;
+      blocks.push({ type: "event", card: card, start: t, end: t + dur });
+      t += dur;
+      if (isRouteNode(card)) prevRoute = card;
+    });
+    return { day: day, blocks: blocks, endMin: t, travelTotal: travelTotal, empty: blocks.length === 0 };
+  }
+
   /* ================= 3. 状态与持久化 ================= */
 
   // filter：感官菜单的双重角色之二 —— 筛选卡片池（"all" 或某个主题）。
-  // 只影响卡片池显示；已放入槽位的卡和路线图不受筛选影响。
-  var state = { filter: "all", view: "intro", slots: {} };
-  SLOTS.forEach(function (s) { state.slots[s.id] = null; });
+  // days：每天的有序卡片队列；stays：Day 1/2 的住宿位；activeDay：日历当前页。
+  var state = {
+    filter: "all", view: "intro", activeDay: "d1",
+    days: { arrival: [], d1: [], d2: [], d3: [] },
+    stays: { d1: null, d2: null }
+  };
 
-  // 点选拼配：selection = { cardId } 或 null（来源槽位随时可从 slots 推导）
+  // 点选拼配：selection = { cardId } 或 null
   var selection = null;
 
-  function slotOfCard(cardId) {
-    for (var i = 0; i < SLOTS.length; i += 1) {
-      if (state.slots[SLOTS[i].id] === cardId) return SLOTS[i].id;
+  function findCardLoc(cardId) {
+    for (var i = 0; i < DAYS.length; i += 1) {
+      var idx = state.days[DAYS[i].id].indexOf(cardId);
+      if (idx !== -1) return { kind: "day", day: DAYS[i].id, index: idx };
     }
+    if (state.stays.d1 === cardId) return { kind: "stay", day: "d1" };
+    if (state.stays.d2 === cardId) return { kind: "stay", day: "d2" };
     return null;
   }
 
-  function selectedItems() {
-    var items = [];
-    SLOTS.forEach(function (s) {
-      var id = state.slots[s.id];
-      if (id && cardById[id]) items.push(cardById[id]);
+  function removeCardEverywhere(cardId) {
+    DAYS.forEach(function (d) {
+      var idx = state.days[d.id].indexOf(cardId);
+      if (idx !== -1) state.days[d.id].splice(idx, 1);
     });
-    return items;
+    if (state.stays.d1 === cardId) state.stays.d1 = null;
+    if (state.stays.d2 === cardId) state.stays.d2 = null;
+  }
+
+  // 全程顺序：到达 → Day1 → 住宿1 → Day2 → 住宿2 → Day3（路线图沿用）
+  function selectedItems() {
+    var ids = [];
+    DAYS.forEach(function (d) {
+      ids = ids.concat(state.days[d.id]);
+      if (d.hasStay && state.stays[d.id]) ids.push(state.stays[d.id]);
+    });
+    return ids.map(function (id) { return cardById[id]; }).filter(Boolean);
+  }
+
+  // 清洗一份草稿（模板 / 导入 / 旧存档共用）：只保留认识的卡，去重
+  function normalizedDraft(rawDays, rawStays) {
+    var seen = {};
+    var days = { arrival: [], d1: [], d2: [], d3: [] };
+    var stays = { d1: null, d2: null };
+    DAYS.forEach(function (d) {
+      var list = rawDays && Array.isArray(rawDays[d.id]) ? rawDays[d.id] : [];
+      list.forEach(function (id) {
+        if (typeof id === "string" && cardById[id] && !seen[id]) {
+          days[d.id].push(id);
+          seen[id] = true;
+        }
+      });
+    });
+    ["d1", "d2"].forEach(function (d) {
+      var id = rawStays ? rawStays[d] : null;
+      if (typeof id === "string" && cardById[id] && !seen[id]) {
+        stays[d] = id;
+        seen[id] = true;
+      }
+    });
+    return { days: days, stays: stays, any: Object.keys(seen).length > 0 };
+  }
+
+  // 旧版槽位制草稿 / 导出文件的转换：按槽位 id 前缀与时间顺序归入对应天
+  function convertV1Slots(slots) {
+    var rawDays = { arrival: [], d1: [], d2: [], d3: [] };
+    var rawStays = { d1: slots.stay1 || null, d2: slots.stay2 || null };
+    Object.keys(slots).sort().forEach(function (sid) {
+      var id = slots[sid];
+      if (!id || sid === "stay1" || sid === "stay2") return;
+      if (sid === "arrival") rawDays.arrival.push(id);
+      else if (/^d1-/.test(sid)) rawDays.d1.push(id);
+      else if (/^d2-/.test(sid)) rawDays.d2.push(id);
+      else if (/^d3-/.test(sid) || sid === "return") rawDays.d3.push(id);
+    });
+    return { days: rawDays, stays: rawStays };
   }
 
   function currentGraph() {
@@ -274,7 +348,10 @@
 
   function save() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, filter: state.filter, view: state.view, slots: state.slots }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        v: 2, filter: state.filter, view: state.view, activeDay: state.activeDay,
+        days: state.days, stays: state.stays
+      }));
     } catch (err) { /* 隐私模式等场景下静默失败 */ }
   }
 
@@ -288,25 +365,23 @@
 
     if (data.filter === "all" || THEMES.indexOf(data.filter) !== -1) state.filter = data.filter;
     if (VIEWS.indexOf(data.view) !== -1) state.view = data.view; // 回访者接着上次的视图
+    if (dayById[data.activeDay]) state.activeDay = data.activeDay;
 
-    var seen = {};
-    if (data.slots && typeof data.slots === "object") {
-      SLOTS.forEach(function (s) {
-        var id = data.slots[s.id];
-        if (typeof id === "string" && cardById[id] && !seen[id]) {
-          state.slots[s.id] = id;
-          seen[id] = true;
-        } else {
-          state.slots[s.id] = null;
-        }
-      });
+    var raw = null;
+    if (data.days && typeof data.days === "object") raw = { days: data.days, stays: data.stays || {} };
+    else if (data.slots && typeof data.slots === "object") raw = convertV1Slots(data.slots);
+    if (raw) {
+      var n = normalizedDraft(raw.days, raw.stays);
+      state.days = n.days;
+      state.stays = n.stays;
     }
   }
 
   /* ================= 4. 渲染 ================= */
 
   var poolEl = document.getElementById("card-pool");
-  var slotListEl = document.getElementById("slot-list");
+  var dayCanvasEl = document.getElementById("day-canvas");
+  var dayTitleEl = document.getElementById("day-title");
   var graphEl = document.getElementById("route-graph");
   var summaryEl = document.getElementById("route-summary");
   var hintBarEl = document.getElementById("hint-bar");
@@ -381,7 +456,7 @@
   }
 
   function buildCardEl(card) {
-    var used = slotOfCard(card.id);
+    var used = findCardLoc(card.id);
     var isLight = card.type === "free-time" || card.type === "buffer";
     var cls = "card";
     if (isLight) cls += " card--light";
@@ -408,7 +483,7 @@
     if (card.heatRisk === "medium") meta.appendChild(chip("偏晒", "badge badge-heat"));
     if (card.heatRisk === "high") meta.appendChild(chip("暴晒", "badge badge-heat"));
     if (card.pending) meta.appendChild(chip("待确认", "badge badge-tbc"));
-    if (used) meta.appendChild(chip("已在 " + slotLabel(slotById[used]), "chip chip-assigned"));
+    if (used) meta.appendChild(chip("已在 " + dayById[used.day].label + (used.kind === "stay" ? " 住宿" : ""), "chip chip-assigned"));
     node.appendChild(meta);
 
     return node;
@@ -431,158 +506,109 @@
     });
   }
 
-  function slotWarnings(slot, card, overlapped) {
+  // 事件块上的即时提醒（按自动排出的实际时段判断）
+  function calWarnings(block) {
+    var card = block.card;
     var items = [];
-    if (overlapped) {
-      items.push({ text: "与上一项的预估时长重叠，建议挪后", strong: true });
-    }
-    if (card.type === "stay" && slot.kind !== "stay") {
-      items.push({ text: "住宿卡不在住宿槽 — 建议移到 Stay 槽", strong: true });
-    }
-    if (slot.kind === "afternoon" && (card.heatRisk === "medium" || card.heatRisk === "high")) {
-      items.push({ text: "午后偏晒（heatRisk: " + card.heatRisk + "），建议挪到上午或傍晚", strong: true });
+    if ((card.heatRisk === "medium" || card.heatRisk === "high") && block.start < 16 * 60 && block.end > 12 * 60) {
+      items.push({ text: "正午偏晒时段", cls: "badge badge-heat" });
     }
     if (card.reservationNeeded) {
-      items.push({ text: "需要提前预约", strong: false });
+      items.push({ text: "需预约", cls: "badge badge-res" });
     }
     return items;
   }
 
-  /**
-   * 覆盖计算：时间槽里的卡按预估时长向后占格（30 分钟一格，向上取整）。
-   * 被覆盖的空槽隐藏；被覆盖但已被占用的槽保持可见并出重叠提醒。
-   * 覆盖不跨天、不跨住宿槽。
-   */
-  function coveredSlots() {
-    var hidden = {};
-    var overlapped = {};
-    for (var i = 0; i < SLOTS.length; i += 1) {
-      var slot = SLOTS[i];
-      if (!slot.time) continue;
-      var cardId = state.slots[slot.id];
-      if (!cardId || !cardById[cardId]) continue;
-      var span = Math.max(1, Math.ceil((cardById[cardId].durationMin || 0) / SLOT_STEP_MIN));
-      for (var k = 1; k < span; k += 1) {
-        var nxt = SLOTS[i + k];
-        if (!nxt || !nxt.time || nxt.day !== slot.day) break;
-        if (state.slots[nxt.id]) overlapped[nxt.id] = true;
-        else hidden[nxt.id] = true;
-      }
-    }
-    return { hidden: hidden, overlapped: overlapped };
-  }
+  function buildEventBlock(block) {
+    var card = block.card;
+    var cls = "cal-event" + (selection && selection.cardId === card.id ? " card--selected" : "");
+    var node = el("article", cls);
+    node.setAttribute("data-card-id", card.id);
+    node.setAttribute("data-drag-card", "");
+    node.setAttribute("data-card-theme", card.theme);
+    var dur = card.durationMin || 0;
+    node.style.minHeight = Math.max(34, Math.min(240, dur * CAL_PX_PER_MIN)) + "px";
 
-  function buildSlotEl(slot, overlapped) {
-    var cardId = state.slots[slot.id];
-    var card = cardId ? cardById[cardId] : null;
-    var cls = "slot " + (card ? "slot--filled" : "slot--empty");
-    if (slot.kind === "stay") cls += " slot--stay";
-
-    if (slot.time) cls += " slot--time";
-    var node = el("section", cls);
-    node.setAttribute("data-slot-id", slot.id);
-
-    var head = el("div", "slot-head");
-    // 放了卡的时间槽显示起止时间，例如 "10:00 – 11:30"
-    var labelText = slot.label;
-    if (slot.time && card && card.durationMin) {
-      labelText = slot.label + " – " + endTimeLabel(slot, card.durationMin);
-    }
-    head.appendChild(el("span", "slot-label", labelText));
-    if (slot.sub) head.appendChild(el("span", "slot-sub", slot.sub));
-    else if (slot.time && !card) head.appendChild(el("span", "slot-sub", "留白"));
+    var head = el("div", "cal-event-head");
+    head.appendChild(el("span", "cal-time", timeLabel(block.start) + (dur ? " – " + timeLabel(block.end) : "")));
+    var removeBtn = el("button", "slot-remove", "移出");
+    removeBtn.setAttribute("type", "button");
+    removeBtn.setAttribute("data-remove-card", card.id);
+    removeBtn.setAttribute("aria-label", "把「" + card.title + "」移出行程");
+    head.appendChild(removeBtn);
     node.appendChild(head);
 
-    if (card) {
-      var occ = el("div", "slot-card" + (selection && selection.cardId === card.id ? " card--selected" : ""));
-      occ.setAttribute("data-card-id", card.id);
-      occ.setAttribute("data-drag-card", "");
-      occ.setAttribute("data-card-theme", card.theme);
-      occ.appendChild(el("span", "slot-card-title", card.title));
-      occ.appendChild(chip(locLabel(card.locationCode), "chip chip-loc"));
-      var dur = durationText(card);
-      if (dur) occ.appendChild(chip(dur));
-      if (card.pending) occ.appendChild(chip("待确认", "badge badge-tbc"));
-      var removeBtn = el("button", "slot-remove", "移出");
-      removeBtn.setAttribute("type", "button");
-      removeBtn.setAttribute("data-remove-slot", slot.id);
-      removeBtn.setAttribute("aria-label", "把「" + card.title + "」移出行程");
-      occ.appendChild(removeBtn);
-      node.appendChild(occ);
+    node.appendChild(el("div", "cal-event-title", card.title));
 
-      var warnings = slotWarnings(slot, card, overlapped);
-      if (warnings.length) {
-        var ul = el("ul", "slot-warnings");
-        warnings.forEach(function (w) {
-          ul.appendChild(el("li", w.strong ? "" : "note-hint", w.text));
-        });
-        node.appendChild(ul);
-      }
-    } else if (!slot.time) {
-      // 时间槽的空态只在标题行标「留白」，不再占一段文字
-      var emptyText = slot.kind === "stay" ? "还没选住宿" : "留白";
-      node.appendChild(el("p", "slot-empty-note", emptyText));
-    }
-
+    var meta = el("div", "card-meta");
+    meta.appendChild(chip(locLabel(card.locationCode), "chip chip-loc"));
+    if (dur) meta.appendChild(chip("约 " + dur + " 分"));
+    if (card.pending) meta.appendChild(chip("待确认", "badge badge-tbc"));
+    calWarnings(block).forEach(function (w) { meta.appendChild(chip(w.text, w.cls)); });
+    node.appendChild(meta);
     return node;
   }
 
-  function buildTravelChip(seg) {
-    var toCard = cardById[seg.toId];
-    var toName = toCard ? toCard.title : seg.toId;
+  function buildTravelBlock(block) {
+    var cls = "cal-travel" + (block.seg.broken ? " cal-travel--broken" : (block.seg.est ? " cal-travel--est" : ""));
+    var node = el("div", cls);
+    node.style.minHeight = Math.max(20, Math.min(90, block.seg.minutes * CAL_PX_PER_MIN * 0.8)) + "px";
+    node.appendChild(el("span", null, timeLabel(block.start) + " · " + block.seg.label));
+    return node;
+  }
 
-    if (seg.kind === "edge") {
-      var e = seg.edge;
-      var mode = MODE_LABELS[e.mode] || e.mode;
-      var text = "下一站 " + toName + " · " + e.label + " · " + mode;
-      if ((e.minutes || 0) >= HEAVY_EDGE_MIN) text += " · 移动偏重";
-      return el("div", "travel-chip", text);
-    }
+  function stepDay(delta) {
+    var idx = DAYS.indexOf(dayById[state.activeDay]) + delta;
+    idx = Math.max(0, Math.min(DAYS.length - 1, idx));
+    state.activeDay = DAYS[idx].id;
+    save();
+    renderDay();
+  }
 
-    if (seg.kind === "region") {
-      var est = seg.est;
-      var rText = "下一站 " + toName + " · 约 " + est.range[0] + "-" + est.range[1] + " 分（"
-        + (est.same ? "同区粗估" : "区域粗估") + "）· 打车";
-      return el("div", "travel-chip travel-chip--region", rText);
-    }
+  function renderDay() {
+    var day = dayById[state.activeDay];
+    var idx = DAYS.indexOf(day);
+    dayTitleEl.textContent = day.label + (day.hint ? " · " + day.hint : "");
+    var prevBtn = document.querySelector('[data-day-nav="-1"]');
+    var nextBtn = document.querySelector('[data-day-nav="1"]');
+    if (prevBtn) prevBtn.disabled = idx === 0;
+    if (nextBtn) nextBtn.disabled = idx === DAYS.length - 1;
 
-    var node = el("div", "travel-chip travel-chip--break");
-    node.appendChild(document.createTextNode("下一站 " + toName + " · 需单独确认"));
-    var detail = seg.brk.reason;
-    if (seg.brk.suggestedVia.length) {
-      var vias = seg.brk.suggestedVia.map(function (id) {
-        return cardById[id] ? cardById[id].title : id;
+    dayCanvasEl.innerHTML = "";
+    var sched = buildDaySchedule(day.id);
+    if (sched.empty) {
+      dayCanvasEl.appendChild(el("p", "cal-empty", "留白。点选或拖一张卡到这里，从 " + timeLabel(day.startMin) + " 开始自动排。"));
+    } else {
+      sched.blocks.forEach(function (b) {
+        dayCanvasEl.appendChild(b.type === "event" ? buildEventBlock(b) : buildTravelBlock(b));
       });
-      detail += " 建议中转：" + vias.join("、");
+      var sumText = "结束于 " + timeLabel(sched.endMin)
+        + (sched.travelTotal ? " · 交通合计约 " + sched.travelTotal + " 分（估）" : "");
+      var warnFull = sched.endMin > DAY_END_WARN_MIN;
+      var sumEl = el("p", "cal-summary" + (warnFull ? " cal-summary--warn" : ""), sumText + (warnFull ? " · 排得偏满" : ""));
+      dayCanvasEl.appendChild(sumEl);
     }
-    var small = document.createElement("small");
-    small.textContent = detail;
-    node.appendChild(small);
-    return node;
-  }
 
-  function renderSlots() {
-    slotListEl.innerHTML = "";
-    var slotEls = {};
-    var lastDay = null;
-    var cover = coveredSlots();
-    SLOTS.forEach(function (slot) {
-      if (slot.day && slot.day !== lastDay) {
-        slotListEl.appendChild(el("h3", "slot-day-head", slot.day));
-        lastDay = slot.day;
+    if (day.hasStay) {
+      var stayId = state.stays[day.id];
+      var stayCard = stayId ? cardById[stayId] : null;
+      var stayWrap = el("div", "cal-stay" + (stayCard ? "" : " cal-stay--empty"));
+      stayWrap.setAttribute("data-stay-drop", day.id);
+      if (stayCard) {
+        stayWrap.setAttribute("data-card-id", stayCard.id);
+        stayWrap.setAttribute("data-drag-card", "");
+        stayWrap.setAttribute("data-card-theme", stayCard.theme);
+        if (selection && selection.cardId === stayCard.id) stayWrap.className += " card--selected";
+        stayWrap.appendChild(el("span", "cal-stay-title", "住宿 · " + stayCard.title));
+        var rm = el("button", "slot-remove", "移出");
+        rm.setAttribute("type", "button");
+        rm.setAttribute("data-remove-card", stayCard.id);
+        stayWrap.appendChild(rm);
+      } else {
+        stayWrap.appendChild(el("span", null, "住宿：把住宿卡放到这里"));
       }
-      if (cover.hidden[slot.id]) return; // 被上一项时长覆盖的空槽不渲染
-      var elx = buildSlotEl(slot, cover.overlapped[slot.id]);
-      slotEls[slot.id] = elx;
-      slotListEl.appendChild(elx);
-    });
-
-    // 相邻已选地点间的交通反馈，插在起点卡所在槽位之后
-    currentGraph().segments.forEach(function (seg) {
-      var fromSlotId = slotOfCard(seg.fromId);
-      var anchor = fromSlotId ? slotEls[fromSlotId] : null;
-      if (anchor) anchor.insertAdjacentElement("afterend", buildTravelChip(seg));
-    });
+      dayCanvasEl.appendChild(stayWrap);
+    }
   }
 
   function buildGraphNode(card) {
@@ -596,8 +622,8 @@
 
     var text = el("div", "graph-node-text");
     text.appendChild(el("span", "graph-node-label", card.mapNode.shortLabel));
-    var slotId = slotOfCard(card.id);
-    if (slotId) text.appendChild(el("span", "graph-node-slot", slotLabel(slotById[slotId])));
+    var loc = findCardLoc(card.id);
+    if (loc) text.appendChild(el("span", "graph-node-slot", dayById[loc.day].label + (loc.kind === "stay" ? " · 住宿" : "")));
     node.appendChild(text);
     return node;
   }
@@ -748,10 +774,9 @@
       return;
     }
     var card = cardById[selection.cardId];
-    var from = slotOfCard(selection.cardId);
-    hintTextEl.textContent = from
-      ? "移动「" + card.title + "」— 点目标槽位（占用则交换）"
-      : "已选「" + card.title + "」— 点一个时间槽放入";
+    var from = findCardLoc(selection.cardId);
+    hintTextEl.textContent = (from ? "移动「" : "已选「") + card.title
+      + "」— 点日历空白排到最后，点已有卡插到它前面";
     hintBarEl.hidden = false;
   }
 
@@ -767,7 +792,7 @@
 
   function renderAll() {
     renderPool();
-    renderSlots();
+    renderDay();
     renderRouteGraph();
     renderHintBar();
     renderThemeMenu();
@@ -804,9 +829,13 @@
     snackbarEl.hidden = true;
   }
 
+  function draftSnapshot() {
+    return JSON.parse(JSON.stringify({ days: state.days, stays: state.stays }));
+  }
+
   function undoAssign(u) {
-    state.slots[u.target] = u.displaced || null;
-    if (u.source) state.slots[u.source] = u.cardId;
+    state.days = u.snap.days;
+    state.stays = u.snap.stays;
     clearSelection();
     hideSnackbar();
     save();
@@ -820,65 +849,71 @@
     selection = null;
   }
 
-  function performAssign(cardId, targetSlotId) {
+  /**
+   * 把卡放进日历。target: { day, beforeId?, stay? }
+   * - 住宿卡自动进该天的住宿位（替换原有）；
+   * - beforeId 指定插到某张卡前面，否则排到当天最后；
+   * - 已在行程里的卡等于移动（先移除再插入）。
+   */
+  function placeCard(cardId, target) {
     var card = cardById[cardId];
-    var slot = slotById[targetSlotId];
-    if (!card || !slot) return;
+    var day = dayById[target.day];
+    if (!card || !day) return;
+    if (target.beforeId === cardId) { clearSelection(); renderAll(); return; }
 
-    var sourceSlotId = slotOfCard(cardId);
-    if (sourceSlotId === targetSlotId) {
-      clearSelection();
-      renderAll();
-      return;
-    }
-
-    var displacedId = state.slots[targetSlotId] || null;
-    // 撤销快照：记录这次放置动了哪两个槽位
-    var undoData = { target: targetSlotId, source: sourceSlotId, displaced: displacedId, cardId: cardId };
-    state.slots[targetSlotId] = cardId;
-    if (sourceSlotId) {
-      // 同一草案不重复：从原槽位移走；目标被占用则两卡交换
-      state.slots[sourceSlotId] = displacedId;
-    }
-
-    // 即时反馈，按重要性只出一条；持久提示由槽位内警告承担
-    var msg;
+    var snap = draftSnapshot();
+    var msg = null;
     var kind = null;
-    if (card.type === "stay" && slot.kind !== "stay") {
-      msg = "注意：「" + card.title + "」是住宿卡，通常放住宿槽";
-      kind = "warn";
-    } else if (slot.kind === "afternoon" && (card.heatRisk === "medium" || card.heatRisk === "high")) {
-      msg = "「" + card.title + "」午后偏晒，建议放上午或傍晚";
-      kind = "warn";
-    } else if (card.reservationNeeded) {
-      msg = "「" + card.title + "」需要提前预约";
-    } else if (sourceSlotId && displacedId) {
-      msg = "两张卡已交换";
-    } else if (sourceSlotId) {
-      msg = "已移动到 " + slotLabel(slot);
-    } else if (displacedId && cardById[displacedId]) {
-      msg = "「" + cardById[displacedId].title + "」已移回菜单";
+
+    if (card.type === "stay") {
+      if (!day.hasStay) {
+        toast("「" + card.title + "」是住宿卡，" + day.label + " 没有住宿位", "warn");
+        return;
+      }
+      removeCardEverywhere(cardId);
+      var displaced = state.stays[day.id];
+      state.stays[day.id] = cardId;
+      msg = displaced && cardById[displaced]
+        ? "已替换 " + day.label + " 住宿「" + cardById[displaced].title + "」"
+        : "已设为 " + day.label + " 住宿";
+    } else if (target.stay) {
+      toast("住宿位只放住宿卡", "warn");
+      return;
     } else {
-      msg = "已放入 " + slotLabel(slot);
+      removeCardEverywhere(cardId);
+      var list = state.days[day.id];
+      var idx = target.beforeId ? list.indexOf(target.beforeId) : -1;
+      if (idx === -1) list.push(cardId);
+      else list.splice(idx, 0, cardId);
+      msg = "已放入 " + day.label;
+    }
+
+    // 放置后按自动排出的时段给一条即时提醒（正午暴晒 / 预约）
+    var sched = buildDaySchedule(day.id);
+    for (var i = 0; i < sched.blocks.length; i += 1) {
+      var b = sched.blocks[i];
+      if (b.type === "event" && b.card.id === cardId) {
+        var warns = calWarnings(b);
+        if (warns.length) {
+          msg = "「" + card.title + "」" + warns[0].text;
+          if (warns[0].cls.indexOf("heat") !== -1) kind = "warn";
+        }
+        break;
+      }
     }
 
     clearSelection();
     save();
     renderAll();
-
-    // 移动端用 snackbar（可撤销、可跳回卡片池），桌面端卡片池常驻，轻提示即可
-    if (isMobile()) {
-      showSnackbar(msg, kind, undoData);
-    } else {
-      toast(msg, kind);
-    }
+    var undoData = { snap: snap };
+    if (isMobile()) showSnackbar(msg, kind, undoData);
+    else toast(msg, kind);
   }
 
-  function removeFromSlot(slotId) {
-    var cardId = state.slots[slotId];
-    if (!cardId) return;
-    hideSnackbar(); // 槽位又变了，旧的撤销快照作废
-    state.slots[slotId] = null;
+  function removeCard(cardId) {
+    if (!findCardLoc(cardId)) return;
+    hideSnackbar(); // 行程又变了，旧的撤销快照作废
+    removeCardEverywhere(cardId);
     if (selection && selection.cardId === cardId) clearSelection();
     save();
     renderAll();
@@ -893,6 +928,10 @@
     if (!rect.width) return;
     var ghost = cardEl.cloneNode(true);
     ghost.className += " fly-ghost";
+    // 克隆只是视觉残影：剥掉语义属性，避免被选择器 / 命中测试当成真卡
+    ghost.removeAttribute("data-card-id");
+    ghost.removeAttribute("data-drag-card");
+    ghost.removeAttribute("data-stay-drop");
     ghost.style.left = rect.left + "px";
     ghost.style.top = rect.top + "px";
     ghost.style.width = rect.width + "px";
@@ -923,19 +962,6 @@
     if (isMobile() && state.view !== "plan") setView("plan");
   }
 
-  function onSlotTap(slotId) {
-    if (selection) {
-      performAssign(selection.cardId, slotId);
-      return;
-    }
-    var occupant = state.slots[slotId];
-    if (occupant) {
-      onCardTap(occupant); // 点已放置的卡 = 选中它准备移动
-      return;
-    }
-    toast("先在菜单点选一张卡片，再点这个槽位");
-  }
-
   function applyPreset(presetId) {
     var preset = null;
     for (var i = 0; i < PRESETS.length; i += 1) {
@@ -944,16 +970,10 @@
     if (!preset) return;
 
     hideSnackbar();
-    var seen = {};
-    SLOTS.forEach(function (s) {
-      var id = preset.slots ? preset.slots[s.id] : null;
-      if (typeof id === "string" && cardById[id] && !seen[id]) {
-        state.slots[s.id] = id;
-        seen[id] = true;
-      } else {
-        state.slots[s.id] = null;
-      }
-    });
+    var n = normalizedDraft(preset.days || {}, preset.stays || {});
+    state.days = n.days;
+    state.stays = n.stays;
+    state.activeDay = "d1";
 
     clearSelection();
     save();
@@ -964,7 +984,7 @@
   /* ---------- 行程的导出 / 导入（本地 JSON 文件，便于朋友间传） ---------- */
 
   function exportDraft() {
-    var payload = { v: 1, site: "yixing", slots: state.slots };
+    var payload = { v: 2, site: "yixing", days: state.days, stays: state.stays };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -977,24 +997,18 @@
     toast("已导出行程文件");
   }
 
-  // 先整体校验再落盘：至少要有一张能认出的卡，避免坏文件清空现有行程
+  // 先整体校验再落盘：至少要有一张能认出的卡，避免坏文件清空现有行程。
+  // 兼容旧版槽位制导出文件（data.slots）。
   function applyImportedSlots(data) {
-    if (!data || typeof data !== "object" || !data.slots || typeof data.slots !== "object") return false;
-    var next = {};
-    var seen = {};
-    var found = false;
-    SLOTS.forEach(function (s) {
-      var id = data.slots[s.id];
-      if (typeof id === "string" && cardById[id] && !seen[id]) {
-        next[s.id] = id;
-        seen[id] = true;
-        found = true;
-      } else {
-        next[s.id] = null;
-      }
-    });
-    if (!found) return false;
-    state.slots = next;
+    if (!data || typeof data !== "object") return false;
+    var raw = null;
+    if (data.days && typeof data.days === "object") raw = { days: data.days, stays: data.stays || {} };
+    else if (data.slots && typeof data.slots === "object") raw = convertV1Slots(data.slots);
+    if (!raw) return false;
+    var n = normalizedDraft(raw.days, raw.stays);
+    if (!n.any) return false;
+    state.days = n.days;
+    state.stays = n.stays;
     return true;
   }
 
@@ -1022,7 +1036,8 @@
   function resetDraft() {
     if (!window.confirm("清空当前拼配草稿？")) return;
     hideSnackbar();
-    SLOTS.forEach(function (s) { state.slots[s.id] = null; });
+    state.days = { arrival: [], d1: [], d2: [], d3: [] };
+    state.stays = { d1: null, d2: null };
     clearSelection();
     try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* ignore */ }
     renderAll();
@@ -1102,11 +1117,32 @@
       return;
     }
 
-    var removeBtn = e.target.closest("[data-remove-slot]");
-    if (removeBtn) { removeFromSlot(removeBtn.getAttribute("data-remove-slot")); return; }
+    var removeBtn = e.target.closest("[data-remove-card]");
+    if (removeBtn) { removeCard(removeBtn.getAttribute("data-remove-card")); return; }
 
-    var slotEl = e.target.closest(".slot");
-    if (slotEl) { onSlotTap(slotEl.getAttribute("data-slot-id")); return; }
+    var navBtn = e.target.closest("[data-day-nav]");
+    if (navBtn) { stepDay(parseInt(navBtn.getAttribute("data-day-nav"), 10)); return; }
+
+    // 日历内点击：有选中卡时是“放置”，没有时是“选中”
+    if (selection) {
+      var evEl = e.target.closest(".cal-event");
+      if (evEl) {
+        var beforeId = evEl.getAttribute("data-card-id");
+        if (beforeId === selection.cardId) { clearSelection(); renderAll(); return; }
+        placeCard(selection.cardId, { day: state.activeDay, beforeId: beforeId });
+        return;
+      }
+      var stayEl = e.target.closest("[data-stay-drop]");
+      if (stayEl) { placeCard(selection.cardId, { day: stayEl.getAttribute("data-stay-drop"), stay: true }); return; }
+      if (e.target.closest("#day-canvas")) {
+        placeCard(selection.cardId, { day: state.activeDay, beforeId: null });
+        return;
+      }
+    } else {
+      var calCard = e.target.closest(".cal-event, .cal-stay[data-card-id]");
+      if (calCard) { onCardTap(calCard.getAttribute("data-card-id"), calCard); return; }
+      if (e.target.closest("#day-canvas")) { toast("先在菜单点选一张卡片"); return; }
+    }
 
     var cardEl = e.target.closest("[data-drag-card]");
     if (cardEl) { onCardTap(cardEl.getAttribute("data-card-id"), cardEl); return; }
@@ -1116,13 +1152,21 @@
 
   var drag = null;
 
+  function clearDropHints() {
+    var marked = document.querySelectorAll(".cal-event--before, .drop-hint");
+    for (var i = 0; i < marked.length; i += 1) {
+      marked[i].classList.remove("cal-event--before");
+      marked[i].classList.remove("drop-hint");
+    }
+  }
+
   function cancelDrag() {
     if (!drag) return;
     if (drag.timer) clearTimeout(drag.timer);
     if (drag.scrollTimer) clearInterval(drag.scrollTimer);
     try { document.body.releasePointerCapture(drag.pointerId); } catch (err) { /* 未捕获时忽略 */ }
     if (drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
-    if (drag.overSlot) drag.overSlot.classList.remove("slot--over");
+    clearDropHints();
     if (drag.el) drag.el.classList.remove("drag-source");
     document.body.classList.remove("drag-active");
     drag = null;
@@ -1150,14 +1194,10 @@
     // 移动端：提起卡片即切到行程拼配，槽位成为可放目标
     if (isMobile() && state.view !== "plan") setView("plan");
 
-    // ghost 伸展到它在网格里将占据的高度（顶端对齐手指 = 开始时间）。
-    // 行高从一个可见的空时间槽实测，切完视图再量才拿得到真实值。
-    var span = Math.max(1, Math.ceil(((card && card.durationMin) || 0) / SLOT_STEP_MIN));
-    var probe = document.querySelector(".slot--time.slot--empty");
-    var rowH = probe && probe.offsetHeight ? probe.offsetHeight : 36;
-    var gap = 8; // #slot-list 的 gap
-    ghost.style.height = rowH + "px";
-    var targetH = span * rowH + (span - 1) * gap;
+    // ghost 伸展到它在日历里将占据的高度（与事件块同一分钟比例）
+    var dur = (card && card.durationMin) || 0;
+    ghost.style.height = "34px";
+    var targetH = Math.max(34, Math.min(240, dur * CAL_PX_PER_MIN));
     void ghost.offsetHeight; // 强制 reflow，让 transition 有起点（不依赖 rAF）
     ghost.style.height = targetH + "px";
 
@@ -1183,19 +1223,35 @@
       "translate(" + (drag.lastX + 14) + "px, " + (drag.lastY - 22) + "px)";
   }
 
+  // 拖拽目标解析：某张卡（插到它前面）> 住宿位 > 日历任意空白（排到最后）
   function updateDropTarget() {
     if (!drag || !drag.lifted) return;
     var under = document.elementFromPoint(drag.lastX, drag.lastY);
-    var slotEl = under ? under.closest(".slot") : null;
-    if (drag.overSlot && drag.overSlot !== slotEl) drag.overSlot.classList.remove("slot--over");
-    if (slotEl) slotEl.classList.add("slot--over");
-    drag.overSlot = slotEl;
+    clearDropHints();
+    drag.drop = null;
+    if (!under) return;
+    var ev = under.closest(".cal-event");
+    if (ev && ev.getAttribute("data-card-id") !== drag.cardId) {
+      ev.classList.add("cal-event--before");
+      drag.drop = { type: "before", beforeId: ev.getAttribute("data-card-id") };
+      return;
+    }
+    var stay = under.closest("[data-stay-drop]");
+    if (stay) {
+      stay.classList.add("drop-hint");
+      drag.drop = { type: "stay", day: stay.getAttribute("data-stay-drop") };
+      return;
+    }
+    if (under.closest("#day-canvas") || under.closest("#view-plan")) {
+      dayCanvasEl.classList.add("drop-hint");
+      drag.drop = { type: "append" };
+    }
   }
 
   document.addEventListener("pointerdown", function (e) {
     if (!e.isPrimary) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (e.target.closest("[data-remove-slot]")) return;
+    if (e.target.closest("[data-remove-card]")) return;
     var cardEl = e.target.closest("[data-drag-card]");
     if (!cardEl) return;
 
@@ -1209,7 +1265,7 @@
       lastX: e.clientX,
       lastY: e.clientY,
       lifted: false,
-      overSlot: null,
+      drop: null,
       ghost: null,
       timer: null,
       scrollTimer: null
@@ -1248,13 +1304,17 @@
     if (!drag || e.pointerId !== drag.pointerId) return;
     var lifted = drag.lifted;
     var cardId = drag.cardId;
-    var overSlot = drag.overSlot;
+    var drop = drag.drop;
     cancelDrag();
 
     if (lifted) {
       suppressClick = true;
       setTimeout(function () { suppressClick = false; }, 150);
-      if (overSlot) performAssign(cardId, overSlot.getAttribute("data-slot-id"));
+      if (drop) {
+        if (drop.type === "before") placeCard(cardId, { day: state.activeDay, beforeId: drop.beforeId });
+        else if (drop.type === "stay") placeCard(cardId, { day: drop.day, stay: true });
+        else placeCard(cardId, { day: state.activeDay, beforeId: null });
+      }
     }
   });
 

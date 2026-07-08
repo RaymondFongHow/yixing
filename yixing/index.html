@@ -34,7 +34,7 @@
     <h2>怎么用</h2>
     <ol class="intro-steps">
       <li>在「菜单」点一张卡，或按住直接拖。</li>
-      <li>到「行程」点一个时间槽放入。</li>
+      <li>到「行程」放进日历，时长和交通会自动排。</li>
       <li>在「路线图」看看动线顺不顺；时间都是粗估。</li>
     </ol>
     <button type="button" class="primary-btn" data-goto="pool">开始拼</button>
@@ -45,7 +45,7 @@
       <h2>菜单</h2>
     </div>
     <p class="section-note">
-      点一张卡选中，再到「行程」点一个时间槽；或按住卡片直接拖过去。
+      点一张卡选中，再到「行程」点日历放入；或按住卡片直接拖过去。
       感官菜单同时切换氛围并筛选；已放进行程的卡不受影响。
       带「待确认」的地点还没最终讨论定。
     </p>
@@ -72,9 +72,18 @@
     <div class="template-row">
       <span class="template-label">模板</span>
       <span id="preset-buttons"></span>
-      <span class="template-note">默认起点，可自由改动；空槽位即留白。</span>
+      <span class="template-note">默认起点，可自由改动；空着的天就是留白。</span>
     </div>
-    <div id="slot-list"></div>
+    <p class="section-note">
+      拖一张卡进来会按预估时长自动向后叠放，地点变化时自动加上交通时间；
+      点已有卡片可把选中的卡插到它前面。
+    </p>
+    <div class="day-pager">
+      <button type="button" class="ghost-btn" data-day-nav="-1" aria-label="前一天">←</button>
+      <span id="day-title"></span>
+      <button type="button" class="ghost-btn" data-day-nav="1" aria-label="后一天">→</button>
+    </div>
+    <div id="day-canvas"></div>
   </section>
 
   <section id="view-graph" class="view graph-section" aria-label="路线图">
@@ -121,11 +130,11 @@
 <div id="toast" class="toast" hidden></div>
 
 <!-- 数据/逻辑文件带版本参数防缓存；改动这些文件时把 v 一起加一 -->
-<script src="data/places.js?v=3"></script>
-<script src="data/transport-edges.js?v=3"></script>
-<script src="data/blocked-edges.js?v=3"></script>
-<script src="data/presets.js?v=3"></script>
-<script src="data/region-times.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="data/places.js?v=4"></script>
+<script src="data/transport-edges.js?v=4"></script>
+<script src="data/blocked-edges.js?v=4"></script>
+<script src="data/presets.js?v=4"></script>
+<script src="data/region-times.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

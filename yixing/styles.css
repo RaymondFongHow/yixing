@@ -306,95 +306,137 @@ button {
 
 .chip-assigned { color: var(--accent); background: transparent; padding-left: 0; }
 
-/* ---------- 时间槽 ---------- */
+/* ---------- 行程日历（自动叠放 + 翻天） ---------- */
 
-#slot-list { display: flex; flex-direction: column; gap: 8px; }
-
-.slot-day-head {
-  margin: 14px 0 0;
-  font-size: 12px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.slot-day-head:first-child { margin-top: 0; }
-
-/* 2 小时粒度的时间槽：空态压成单行，别让 20 个槽占满整屏 */
-.slot--time { padding: 7px 12px 8px; }
-.slot--time .slot-label { font-variant-numeric: tabular-nums; }
-.slot--time.slot--empty .slot-sub { opacity: 0.5; text-transform: none; letter-spacing: 0.04em; }
-
-.slot {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 9px 12px 10px;
-  box-shadow: var(--shadow);
-  transition: border-color 0.2s ease, background-color 0.3s ease;
-}
-
-.slot--empty {
-  background: transparent;
-  border-style: dashed;
-  box-shadow: none;
-}
-
-.slot--stay { border-left: 3px solid var(--c-night); }
-
-.slot--over {
-  border-color: var(--accent);
-  outline: 2px solid var(--accent);
-  outline-offset: 0;
-}
-
-.slot-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.slot-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-.slot-sub {
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-  opacity: 0.65;
-}
-
-.slot-empty-note {
-  margin: 6px 0 2px;
-  font-size: 12.5px;
-  color: var(--muted);
-  opacity: 0.8;
-}
-
-.slot-card {
-  margin-top: 7px;
+.day-pager {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+#day-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.day-pager button:disabled { opacity: 0.3; cursor: default; }
+
+#day-canvas {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--chip-bg);
+  min-height: 220px;
+  border-radius: 12px;
+}
+
+#day-canvas.drop-hint,
+.drop-hint {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+}
+
+.cal-event {
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-left: 3px solid var(--card-accent, var(--line));
+  border-radius: 10px;
+  padding: 8px 12px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   touch-action: pan-y;
 }
 
-.slot-card.card--selected { outline: 2px solid var(--accent); }
+/* 插入位置提示：上缘出现一条 accent 线 */
+.cal-event--before { box-shadow: 0 -3px 0 0 var(--accent), var(--shadow); }
 
-.slot-card-title { font-size: 13.5px; font-weight: 600; margin-right: auto; }
+.cal-event.card--selected { outline: 2px solid var(--accent); }
+
+.cal-event-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cal-time {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-event-title { font-size: 14px; font-weight: 600; }
+
+.cal-travel {
+  margin-left: 22px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  display: flex;
+  align-items: center;
+}
+
+.cal-travel--est { border-left-style: dashed; }
+
+.cal-travel--broken {
+  border-left-color: var(--warn);
+  color: var(--warn);
+}
+
+.cal-empty {
+  margin: 0;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 30px 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.cal-summary {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cal-summary--warn { color: var(--warn); }
+
+.cal-stay {
+  margin-top: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--c-night);
+  border-radius: 10px;
+  padding: 9px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-y;
+}
+
+.cal-stay--empty {
+  background: transparent;
+  border-style: dashed;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.cal-stay.card--selected { outline: 2px solid var(--accent); }
+
+.cal-stay-title { font-weight: 600; }
 
 .slot-remove {
   font-size: 11px;
@@ -402,39 +444,9 @@ button {
   padding: 4px 8px;
   border-radius: 6px;
   border: 1px solid var(--line);
+  flex: 0 0 auto;
 }
 .slot-remove:hover { color: var(--warn); border-color: var(--warn); }
-
-.slot-warnings { margin: 6px 0 0; padding: 0; list-style: none; }
-
-.slot-warnings li {
-  font-size: 11.5px;
-  color: var(--warn);
-  padding: 2px 0;
-}
-
-.slot-warnings li.note-hint { color: var(--muted); }
-
-/* 槽位之间的交通提示 */
-
-.travel-chip {
-  margin: 0 0 0 22px;
-  padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--line);
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.travel-chip--break {
-  border-left-style: dashed;
-  border-left-color: var(--warn);
-  color: var(--warn);
-}
-
-/* 没有直连边、按区域对兜底的粗估段 */
-.travel-chip--region { border-left-style: dotted; }
-
-.travel-chip small { display: block; color: var(--muted); font-size: 11px; }
 
 /* ---------- preset / 操作按钮 ---------- */
 
@@ -875,11 +887,9 @@ button {
 
 body.drag-active { cursor: grabbing; }
 
-body.drag-active .slot {
-  border-style: solid;
-  border-color: var(--accent);
-  border-width: 1px;
-  opacity: 0.95;
+body.drag-active #day-canvas {
+  outline: 1px dashed var(--line);
+  outline-offset: 6px;
 }
 
 .drag-source { opacity: 0.35; }
