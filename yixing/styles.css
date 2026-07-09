@@ -656,9 +656,30 @@ button {
 .region-legend--d2::before { background: var(--c-bamboo); }
 .region-legend--d3::before { background: var(--c-night); }
 
-/* 悬浮某天图例：突出当天动线、淡化其余（桌面增强；触屏无 hover，不受影响） */
+/* 点/悬浮某天图例：单独看它的动线（点选是触屏主路径，悬停是桌面预览） */
 .region-route, .region-arrow, .region-legend-item { transition: opacity 0.15s ease; }
-.region-legend-item[data-hi-day] { cursor: default; }
+.region-legend-item[data-hi-day] {
+  cursor: pointer;
+  padding: 3px 8px;
+  margin: -3px 0;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.region-legend-item[data-hi-day]:hover { border-color: var(--line); }
+/* 被点选“单独看”的那天：描边点亮，明确当前聚焦在哪 */
+.region-overview[data-hi="arrival"] .region-legend--arrival,
+.region-overview[data-hi="d1"] .region-legend--d1,
+.region-overview[data-hi="d2"] .region-legend--d2,
+.region-overview[data-hi="d3"] .region-legend--d3 { border-color: var(--accent); }
+
+.region-legend-hint {
+  text-align: center;
+  margin: 7px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+.region-legend-hint[hidden] { display: none; }
 .region-overview[data-hi] .region-route,
 .region-overview[data-hi] .region-arrow { opacity: 0.12; }
 .region-overview[data-hi] .region-legend-item { opacity: 0.4; }

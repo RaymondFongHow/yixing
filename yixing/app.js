@@ -962,6 +962,8 @@
     return paths;
   }
 
+  var regionFocusDay = null; // 图例上被点选“单独看”的那天（null = 全部）
+
   function updateRegionRoutes() {
     var g = document.getElementById("region-routes");
     var legend = document.getElementById("region-legend");
@@ -1020,21 +1022,36 @@
     if (legend && !paths.length) {
       legend.appendChild(el("span", "region-legend-item", "放入两个不同区域的地点后，动线会按天画在图上"));
     }
+
+    // 提示只在真有动线时出现；动线一变就清掉之前固定的“单独看”
+    var hint = document.getElementById("region-legend-hint");
+    if (hint) hint.hidden = !paths.length;
+    regionFocusDay = null;
+    if (legend) { var ov = legend.closest(".region-overview"); if (ov) ov.removeAttribute("data-hi"); }
   }
 
-  // 悬浮某天图例 → 高亮当天动线、淡化其余（桌面增强；图例是静态容器，一次绑定即可）
+  // 图例上的某天：点一下“单独看”它的动线（触屏主路径），桌面端悬停可预览。
+  // data-hi 挂在 .region-overview 上，CSS 据此高亮该天、淡化其余。
   function setupRegionLegendHover() {
     var legend = document.getElementById("region-legend");
     var overview = legend ? legend.closest(".region-overview") : null;
     if (!legend || !overview) return;
+    function applyFocus() {
+      if (regionFocusDay) overview.setAttribute("data-hi", regionFocusDay);
+      else overview.removeAttribute("data-hi");
+    }
+    legend.addEventListener("click", function (e) {
+      var item = e.target.closest("[data-hi-day]");
+      if (!item) return;
+      var day = item.getAttribute("data-hi-day");
+      regionFocusDay = (regionFocusDay === day) ? null : day; // 再点一次取消
+      applyFocus();
+    });
     legend.addEventListener("mouseover", function (e) {
       var item = e.target.closest("[data-hi-day]");
-      if (item) overview.setAttribute("data-hi", item.getAttribute("data-hi-day"));
-      else overview.removeAttribute("data-hi");
+      if (item) overview.setAttribute("data-hi", item.getAttribute("data-hi-day")); // 悬停预览
     });
-    legend.addEventListener("mouseleave", function () {
-      overview.removeAttribute("data-hi");
-    });
+    legend.addEventListener("mouseleave", applyFocus); // 离开后回到固定的那天（或全部）
   }
 
   function renderHintBar() {
