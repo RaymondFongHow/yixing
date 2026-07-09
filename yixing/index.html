@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>宜兴之旅</title>
 <meta name="description" content="宜兴四人行的行程拼配工具：自己选卡、自己拼、看看动线顺不顺。">
-<link rel="stylesheet" href="styles.css?v=23">
+<link rel="stylesheet" href="styles.css?v=24">
 </head>
 <body data-view="intro">
 
@@ -58,7 +58,8 @@
       <button type="button" data-theme-btn="spring">春日 · 茶与田野</button>
       <button type="button" data-theme-btn="bamboo-water">竹洞水 · 清凉</button>
       <button type="button" data-theme-btn="food">餐饮 · 不分早晚</button>
-      <button type="button" data-theme-btn="night">夜晚 · 住宿与自由</button>
+      <button type="button" data-theme-btn="night">夜晚 · 住宿与夜色</button>
+      <button type="button" data-theme-btn="flex">机动 · 自由与缓冲</button>
     </nav>
     <div id="card-pool"></div>
   </section>
@@ -176,6 +177,7 @@
       </div>
       <label class="field"><span>暑热风险</span><select id="cf-heat"></select></label>
       <label class="field field--check"><input type="checkbox" id="cf-reservation"> 需预约</label>
+      <label class="field field--check"><input type="checkbox" id="cf-repeatable"> 可多次放入</label>
       <label class="field field--full"><span>标签（顿号或逗号分隔）</span><input type="text" id="cf-tags" placeholder="例：紫砂、老街、散步"></label>
       <label class="field field--full"><span>简介</span><textarea id="cf-summary" rows="2" maxlength="120"></textarea></label>
       <label class="field field--check"><input type="checkbox" id="cf-pending"> 待确认（未讨论定）</label>
@@ -202,11 +204,11 @@
 </div>
 
 <!-- 数据/逻辑文件带版本参数防缓存；改动这些文件时把 v 一起加一 -->
-<script src="data/places.js?v=23"></script>
-<script src="data/transport-edges.js?v=23"></script>
-<script src="data/blocked-edges.js?v=23"></script>
-<script src="data/presets.js?v=23"></script>
-<script src="data/region-times.js?v=23"></script>
-<script src="app.js?v=23"></script>
+<script src="data/places.js?v=24"></script>
+<script src="data/transport-edges.js?v=24"></script>
+<script src="data/blocked-edges.js?v=24"></script>
+<script src="data/presets.js?v=24"></script>
+<script src="data/region-times.js?v=24"></script>
+<script src="app.js?v=24"></script>
 </body>
 </html>

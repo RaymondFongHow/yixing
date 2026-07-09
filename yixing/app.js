@@ -32,7 +32,7 @@
 
   var STORAGE_KEY = "yixing-draft-v1";
   var POOL_KEY = "yixing-pool-v1";   // 用户的工作卡池（菜单）持久化位置
-  var THEMES = ["dingshu", "spring", "bamboo-water", "food", "night"];
+  var THEMES = ["dingshu", "spring", "bamboo-water", "food", "night", "flex"];
   var VIEWS = ["intro", "pool", "plan", "graph"]; // 移动端四个子页；桌面端三栏并排
   var HEAVY_EDGE_MIN = 60; // 达到这个分钟数即提示“移动偏重”
 
@@ -69,7 +69,8 @@
     { theme: "spring", label: "春日 · 茶与田野", blurb: "阳羡茶、茶园、山坡" },
     { theme: "bamboo-water", label: "竹洞水 · 清凉", blurb: "竹海、溶洞、湖边" },
     { theme: "food", label: "餐饮 · 不分早晚", blurb: "咖啡、正餐、面馆" },
-    { theme: "night", label: "夜晚 · 住宿 / 自由", blurb: "住宿、夜色、打牌" }
+    { theme: "night", label: "夜晚 · 住宿 / 夜色", blurb: "住宿、夜色、饭后散步" },
+    { theme: "flex", label: "机动 · 自由与缓冲", blurb: "打牌、麻将、休息、缓冲" }
   ];
 
   var TYPE_LABELS = {
@@ -108,6 +109,19 @@
   }
 
   var cardById = {};   // 由 rebuildIndex() 依据当前 PLACES 重建（见「卡池」一节）
+
+  // 可重复卡（repeatable）在行程里以「实例 id」= 基础 id + "~" + 唯一后缀 存放，
+  // 这样同一张卡能出现多次而互不影响。非重复卡直接用基础 id（无 "~"）。
+  var REPEAT_SEP = "~";
+  function baseId(id) {
+    var i = id.indexOf(REPEAT_SEP);
+    return i === -1 ? id : id.slice(0, i);
+  }
+  function cardOf(id) { return cardById[baseId(id)]; }
+  function isRepeatable(id) { var c = cardOf(id); return !!(c && c.repeatable); }
+  function newInstanceId(cardId) {
+    return baseId(cardId) + REPEAT_SEP + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+  }
 
   /* ================= 2. 纯数据逻辑（与渲染分离） ================= */
 
@@ -253,7 +267,7 @@
     var travelTotal = 0;
     var prevRoute = null;
     state.days[dayId].forEach(function (id) {
-      var card = cardById[id];
+      var card = cardOf(id);
       if (!card) return;
       if (prevRoute && isRouteNode(card)) {
         var seg = travelSegment(prevRoute, card);
@@ -264,7 +278,7 @@
         }
       }
       var dur = card.durationMin || 0;
-      blocks.push({ type: "event", card: card, start: t, end: t + dur });
+      blocks.push({ type: "event", card: card, instId: id, start: t, end: t + dur });
       t += dur;
       if (isRouteNode(card)) prevRoute = card;
     });
@@ -310,7 +324,7 @@
       ids = ids.concat(state.days[d.id]);
       if (d.hasStay && state.stays[d.id]) ids.push(state.stays[d.id]);
     });
-    return ids.map(function (id) { return cardById[id]; }).filter(Boolean);
+    return ids.map(function (id) { return cardOf(id); }).filter(Boolean);
   }
 
   function draftIsEmpty() {
@@ -328,7 +342,9 @@
     DAYS.forEach(function (d) {
       var list = rawDays && Array.isArray(rawDays[d.id]) ? rawDays[d.id] : [];
       list.forEach(function (id) {
-        if (typeof id === "string" && cardById[id] && !seen[id]) {
+        // 认识这张（基础）卡、且这个具体 id 没出现过就保留：
+        // 可重复卡的多个实例 id 各不相同 → 都留下；非重复卡重复出现会被去掉。
+        if (typeof id === "string" && cardById[baseId(id)] && !seen[id]) {
           days[d.id].push(id);
           seen[id] = true;
         }
@@ -336,7 +352,7 @@
     });
     ["d1", "d2"].forEach(function (d) {
       var id = rawStays ? rawStays[d] : null;
-      if (typeof id === "string" && cardById[id] && !seen[id]) {
+      if (typeof id === "string" && cardById[baseId(id)] && !seen[id]) {
         stays[d] = id;
         seen[id] = true;
       }
@@ -417,6 +433,7 @@
       sourceLinks: Array.isArray(raw.sourceLinks) ? raw.sourceLinks : []
     };
     if (raw.pending) card.pending = true;
+    if (raw.repeatable) card.repeatable = true; // 可重复卡：一份行程里能放多次
     if (raw.mapNode === null) card.mapNode = null;
     else if (raw.mapNode && typeof raw.mapNode === "object") card.mapNode = raw.mapNode;
     else card.mapNode = (loc === "CURRENT" || type === "free-time" || type === "buffer")
@@ -608,7 +625,8 @@
   }
 
   function buildCardEl(card) {
-    var used = findCardLoc(card.id);
+    // 可重复卡永远“可用”，不标已在行程（它可以再放）
+    var used = card.repeatable ? null : findCardLoc(card.id);
     var isLight = card.type === "free-time" || card.type === "buffer";
     var cls = "card";
     if (isLight) cls += " card--light";
@@ -641,6 +659,7 @@
     if (card.heatRisk === "medium") meta.appendChild(chip("偏晒", "badge badge-heat"));
     if (card.heatRisk === "high") meta.appendChild(chip("暴晒", "badge badge-heat"));
     if (card.pending) meta.appendChild(chip("待确认", "badge badge-tbc"));
+    if (card.repeatable) meta.appendChild(chip("可多次", "badge badge-repeat"));
     if (used) meta.appendChild(chip("已在 " + dayById[used.day].label + (used.kind === "stay" ? " 住宿" : ""), "chip chip-assigned"));
     node.appendChild(meta);
 
@@ -691,9 +710,10 @@
 
   function buildEventBlock(block) {
     var card = block.card;
-    var cls = "cal-event" + (selection && selection.cardId === card.id ? " card--selected" : "");
+    var instId = block.instId || card.id; // 行程内的身份用实例 id（可重复卡每份独立）
+    var cls = "cal-event" + (selection && selection.cardId === instId ? " card--selected" : "");
     var node = el("article", cls);
-    node.setAttribute("data-card-id", card.id);
+    node.setAttribute("data-card-id", instId);
     node.setAttribute("data-drag-card", "");
     node.setAttribute("data-card-theme", card.theme);
     var dur = card.durationMin || 0;
@@ -703,7 +723,7 @@
     head.appendChild(el("span", "cal-time", timeLabel(block.start) + (dur ? " – " + timeLabel(block.end) : "")));
     var removeBtn = el("button", "slot-remove", "移出");
     removeBtn.setAttribute("type", "button");
-    removeBtn.setAttribute("data-remove-card", card.id);
+    removeBtn.setAttribute("data-remove-card", instId);
     removeBtn.setAttribute("aria-label", "把「" + card.title + "」移出行程");
     head.appendChild(removeBtn);
     node.appendChild(head);
@@ -765,18 +785,18 @@
 
     if (day.hasStay) {
       var stayId = state.stays[day.id];
-      var stayCard = stayId ? cardById[stayId] : null;
+      var stayCard = stayId ? cardOf(stayId) : null;
       var stayWrap = el("div", "cal-stay" + (stayCard ? "" : " cal-stay--empty"));
       stayWrap.setAttribute("data-stay-drop", day.id);
       if (stayCard) {
-        stayWrap.setAttribute("data-card-id", stayCard.id);
+        stayWrap.setAttribute("data-card-id", stayId);
         stayWrap.setAttribute("data-drag-card", "");
         stayWrap.setAttribute("data-card-theme", stayCard.theme);
-        if (selection && selection.cardId === stayCard.id) stayWrap.className += " card--selected";
+        if (selection && selection.cardId === stayId) stayWrap.className += " card--selected";
         stayWrap.appendChild(el("span", "cal-stay-title", "住宿 · " + stayCard.title));
         var rm = el("button", "slot-remove", "移出");
         rm.setAttribute("type", "button");
-        rm.setAttribute("data-remove-card", stayCard.id);
+        rm.setAttribute("data-remove-card", stayId);
         stayWrap.appendChild(rm);
       } else {
         stayWrap.appendChild(el("span", null, "住宿：把住宿卡放到这里"));
@@ -1076,7 +1096,7 @@
       hintBarEl.hidden = true;
       return;
     }
-    var card = cardById[selection.cardId];
+    var card = cardOf(selection.cardId);
     var from = findCardLoc(selection.cardId);
     hintTextEl.textContent = (from ? "移动「" : "已选「") + card.title
       + "」— 点日历空白排到最后，点已有卡插到它前面";
@@ -1183,10 +1203,17 @@
    * - 已在行程里的卡等于移动（先移除再插入）。
    */
   function placeCard(cardId, target) {
-    var card = cardById[cardId];
+    var card = cardOf(cardId);
     var day = dayById[target.day];
     if (!card || !day) return;
     if (target.beforeId === cardId) { clearSelection(); renderAll(); return; }
+
+    // 从菜单放一张可重复卡（id 还没有 "~"）= 新实例，不动已放的那些；
+    // 其余情况（非重复卡，或移动某个已放的实例）= 先摘掉再插 = 移动语义。
+    var placeId = cardId;
+    if (card.repeatable && cardId.indexOf(REPEAT_SEP) === -1) {
+      placeId = newInstanceId(cardId);
+    }
 
     var snap = draftSnapshot();
     var msg = null;
@@ -1199,19 +1226,19 @@
       }
       removeCardEverywhere(cardId);
       var displaced = state.stays[day.id];
-      state.stays[day.id] = cardId;
-      msg = displaced && cardById[displaced]
-        ? "已替换 " + day.label + " 住宿「" + cardById[displaced].title + "」"
+      state.stays[day.id] = placeId;
+      msg = displaced && cardOf(displaced)
+        ? "已替换 " + day.label + " 住宿「" + cardOf(displaced).title + "」"
         : "已设为 " + day.label + " 住宿";
     } else if (target.stay) {
       toast("住宿位只放住宿卡", "warn");
       return;
     } else {
-      removeCardEverywhere(cardId);
+      if (placeId === cardId) removeCardEverywhere(cardId); // 非重复 / 移动才摘；新实例不摘
       var list = state.days[day.id];
       var idx = target.beforeId ? list.indexOf(target.beforeId) : -1;
-      if (idx === -1) list.push(cardId);
-      else list.splice(idx, 0, cardId);
+      if (idx === -1) list.push(placeId);
+      else list.splice(idx, 0, placeId);
       msg = "已放入 " + day.label;
     }
 
@@ -1219,7 +1246,7 @@
     var sched = buildDaySchedule(day.id);
     for (var i = 0; i < sched.blocks.length; i += 1) {
       var b = sched.blocks[i];
-      if (b.type === "event" && b.card.id === cardId) {
+      if (b.type === "event" && b.instId === placeId) {
         var warns = calWarnings(b);
         if (warns.length) {
           msg = "「" + card.title + "」" + warns[0].text;
@@ -1244,7 +1271,7 @@
     if (selection && selection.cardId === cardId) clearSelection();
     save();
     renderAll();
-    if (cardById[cardId]) toast("「" + cardById[cardId].title + "」已移出行程");
+    if (cardOf(cardId)) toast("「" + cardOf(cardId).title + "」已移出行程");
   }
 
   // 选中反馈动画：卡片影子滑向底部悬置区（hint bar 的位置），再进行程视图
@@ -1274,7 +1301,7 @@
   }
 
   function onCardTap(cardId, cardEl) {
-    var card = cardById[cardId];
+    var card = cardOf(cardId);
     if (!card) return;
     if (selection && selection.cardId === cardId) {
       clearSelection();
@@ -1517,6 +1544,7 @@
     document.getElementById("cf-tags").value = c ? (c.tags || []).join("、") : "";
     document.getElementById("cf-summary").value = c ? (c.summary || "") : "";
     document.getElementById("cf-reservation").checked = c ? !!c.reservationNeeded : false;
+    document.getElementById("cf-repeatable").checked = c ? !!c.repeatable : false;
     document.getElementById("cf-pending").checked = c ? !!c.pending : false;
     var times = c ? (c.bestTime || []) : ["afternoon"];
     var boxes = document.querySelectorAll(".cf-time");
@@ -1553,6 +1581,8 @@
     merged.tags = tags;
     merged.summary = document.getElementById("cf-summary").value.trim();
     merged.reservationNeeded = document.getElementById("cf-reservation").checked;
+    if (document.getElementById("cf-repeatable").checked) merged.repeatable = true;
+    else delete merged.repeatable;
     if (document.getElementById("cf-pending").checked) merged.pending = true;
     else delete merged.pending;
     if (base.mapNode && typeof base.mapNode === "object") delete merged.mapNode; // 让 normalizeCard 按新主题/位置重算
@@ -1814,7 +1844,7 @@
   function liftDrag() {
     if (!drag || drag.lifted) return;
     drag.lifted = true;
-    var card = cardById[drag.cardId];
+    var card = cardOf(drag.cardId);
     var ghost = el("div", "drag-ghost");
     ghost.appendChild(el("span", "drag-ghost-title", card ? card.title : ""));
     if (card && card.durationMin) {

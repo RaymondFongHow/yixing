@@ -10,6 +10,7 @@
   --c-bamboo: #2d8f83;
   --c-food: #9d6b43;
   --c-night: #d8a451;
+  --c-flex: #8a8d86;
 
   /* 素色基调（近白） */
   --bg: #fafaf9;
@@ -60,6 +61,15 @@
   --line: #e8dcc9;
 }
 
+[data-theme="flex"] {
+  --bg: #f1f2f0;
+  --text: #24251f;
+  --accent: #6f716a;
+  --surface: #fbfbf9;
+  --muted: #7b7d75;
+  --line: #e3e4df;
+}
+
 [data-theme="night"] {
   --bg: #2c2620;          /* 暖夜灰而非近黑：降低与其余素色页面的对比 */
   --text: #e7ddcd;        /* 文字调暗一档，减小刺眼的高对比 */
@@ -79,6 +89,7 @@
 [data-card-theme="bamboo-water"] { --card-accent: var(--c-bamboo); }
 [data-card-theme="food"] { --card-accent: var(--c-food); }
 [data-card-theme="night"] { --card-accent: var(--c-night); }
+[data-card-theme="flex"] { --card-accent: var(--c-flex); }
 
 /* ---------- 基础 ---------- */
 
@@ -315,6 +326,13 @@ button {
 .badge-tbc {
   color: var(--muted);
   border: 1px dashed var(--line);
+  background: transparent;
+}
+
+/* 可重复卡：放一次不会“用掉”，可再放 */
+.badge-repeat {
+  color: var(--card-accent, var(--muted));
+  border: 1px solid currentColor;
   background: transparent;
 }
 
